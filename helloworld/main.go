@@ -11,6 +11,8 @@ import (
 	"github.com/micro/go-micro/v2/server"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
 	"time"
 )
 
@@ -32,6 +34,9 @@ type withCancel struct {
 }
 
 func main() {
+	halt := make(chan os.Signal)
+	defer close(halt)
+	signal.Notify(halt, os.Interrupt)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancellations["global"] = withCancel{
 		ctx:    ctx,
@@ -68,7 +73,11 @@ func main() {
 		}
 	}()
 
-	time.Sleep(1 * time.Second)
+	go func() {
+		<-halt
+		cancellations["global"].cancel()
+	}()
+
 	<-cancellations["global"].ctx.Done()
 }
 
