@@ -15,32 +15,11 @@ replace k8s.io/component-base => k8s.io/component-base v0.0.0-20190708175518-244
 replace google.golang.org/grpc => google.golang.org/grpc v1.24.0
 
 require (
-	github.com/99designs/gqlgen v0.10.1
-	github.com/astaxie/beego v1.12.0
-	github.com/emicklei/go-restful v2.11.1+incompatible
-	github.com/gin-gonic/gin v1.4.0
-	github.com/golang/glog v0.0.0-20160126235308-23def4e6c14b
 	github.com/golang/protobuf v1.3.3
 	github.com/google/uuid v1.1.1
-	github.com/gorilla/rpc v1.2.0
-	github.com/gorilla/websocket v1.4.1
-	github.com/grpc-ecosystem/grpc-gateway v1.12.1
-	github.com/hailocab/go-geoindex v0.0.0-20160127134810-64631bfe9711
-	github.com/micro/cli/v2 v2.1.2
+	github.com/grpc-ecosystem/grpc-gateway v1.12.1 // indirect
+	github.com/kr/pretty v0.2.0 // indirect
 	github.com/micro/go-micro/v2 v2.4.0
-	github.com/micro/go-plugins/broker/grpc/v2 v2.3.0
-	github.com/micro/go-plugins/client/selector/static/v2 v2.3.0
-	github.com/micro/go-plugins/config/source/configmap/v2 v2.3.0
-	github.com/micro/go-plugins/config/source/grpc/v2 v2.3.0
-	github.com/micro/go-plugins/registry/etcd/v2 v2.3.0
-	github.com/micro/go-plugins/registry/kubernetes/v2 v2.3.0
-	github.com/micro/go-plugins/wrapper/select/roundrobin/v2 v2.3.0
-	github.com/micro/go-plugins/wrapper/select/shard/v2 v2.3.0
-	github.com/micro/micro/v2 v2.4.0
-	github.com/pborman/uuid v1.2.0
-	github.com/shiena/ansicolor v0.0.0-20151119151921-a422bbe96644 // indirect
-	github.com/vektah/gqlparser v1.2.0
-	golang.org/x/net v0.0.0-20200222125558-5a598a2470a0
-	google.golang.org/genproto v0.0.0-20191216164720-4f79533eabd1
-	google.golang.org/grpc v1.26.0
+	golang.org/x/time v0.0.0-20191024005414-555d28b269f0 // indirect
+	gopkg.in/check.v1 v1.0.0-20190902080502-41f04d3bba15 // indirect
 )
