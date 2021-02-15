@@ -9,7 +9,7 @@ import (
 	"github.com/micro/go-micro/v2/client/grpc"
 	"github.com/micro/go-micro/v2/registry"
 	"github.com/micro/go-micro/v2/server"
-	"log"
+	"github.com/thejerf/suture"
 	"net/http"
 	"os"
 	"os/signal"
@@ -33,52 +33,57 @@ type withCancel struct {
 	cancel context.CancelFunc
 }
 
+var services = make(map[string]suture.ServiceToken)
+
 func main() {
-	halt := make(chan os.Signal)
-	defer close(halt)
-	signal.Notify(halt, os.Interrupt)
+	supervisor := suture.NewSimple("universe")
+	r := registry.NewRegistry()
 	ctx, cancel := context.WithCancel(context.Background())
-	cancellations["global"] = withCancel{
-		ctx:    ctx,
-		cancel: cancel,
+
+	halt := make(chan os.Signal, 1)
+	signal.Notify(halt, os.Interrupt)
+
+	sMain := mainService{
+		supervisor: supervisor,
+		ctx:        ctx,
+		cancel:     cancel,
 	}
 
-	go run("helloworld", "-1", "0.0.0.0:9200", r)
-	go run("helloworld", "-2", "0.0.0.0:9201", r)
-
-	mux := http.ServeMux{}
-	mux.Handle("/cancel1", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("closing :9200"))
-		cancellations["helloworld-1"].cancel()
-	}))
-
-	mux.Handle("/cancel2", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("closing :9201"))
-		cancellations["helloworld-2"].cancel()
-	}))
-
-	mux.Handle("/cancelglobal", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("closing all services"))
-		cancellations["global"].cancel()
-	}))
-
-	s := http.Server{
-		Addr:    ":9300",
-		Handler: &mux,
+	s1ctx, s1cancel := context.WithCancel(ctx)
+	s1 := service{
+		name:    "hello-world-1",
+		address: "0.0.0.0:9200",
+		r:       r,
+		ctx:     s1ctx,
+		cancel:  s1cancel,
 	}
 
-	go func() {
-		if err := s.ListenAndServe(); err != nil {
-			log.Print(err)
+	s2ctx, s2cancel := context.WithCancel(ctx)
+	s2 := service{
+		name:    "hello-world-2",
+		address: "0.0.0.0:9201",
+		r:       r,
+		ctx:     s2ctx,
+		cancel:  s2cancel,
+	}
+
+	services["main"] = supervisor.Add(sMain)
+	services["s1"] = supervisor.Add(s1)
+	services["s2"] = supervisor.Add(s2)
+
+	go supervisor.Serve()
+
+	for {
+		select {
+		case <-ctx.Done():
+			supervisor.Stop()
+			return
+		case <-halt:
+			cancel()
+			supervisor.Stop()
+			return
 		}
-	}()
-
-	go func() {
-		<-halt
-		cancellations["global"].cancel()
-	}()
-
-	<-cancellations["global"].ctx.Done()
+	}
 }
 
 func newGrpcClient() client.Client {
@@ -88,43 +93,83 @@ func newGrpcClient() client.Client {
 	return c
 }
 
-func run(name, instance, address string, r registry.Registry) {
-	ctx, cancel := context.WithCancel(cancellations["global"].ctx)
-	cancellations[name+instance] = withCancel{
-		ctx:    ctx,
-		cancel: cancel,
-	}
+// service implements the suture.Service interface.
+type service struct {
+	name    string
+	address string
+	r       registry.Registry
+	ctx     context.Context
+	cancel  context.CancelFunc
+}
 
-	server := server.NewServer(
-		server.Name(name+instance),
+func (s service) Serve() {
+	microServer := server.NewServer(
+		server.Name(s.name),
 		server.Id(uuid.New().String()),
 	)
 
 	service := micro.NewService(
 		micro.Client(newGrpcClient()),
-		micro.Name(name+instance),
+		micro.Name(s.name),
 		micro.Registry(r),
-		micro.Context(ctx),
-		micro.Server(server),
-		micro.Address(address),
+		micro.Server(microServer),
+		micro.Address(s.address),
+		micro.Context(s.ctx),
 	)
 
 	service.Init()
 
 	pb.RegisterGreeterHandler(service.Server(), new(Greeter))
 
-	go func() {
-		if err := service.Run(); err != nil {
-			log.Fatal(err)
-		}
-	}()
+	if err := service.Run(); err != nil {
+		// [...] if this function either returns or panics, the Supervisor will call it again.
+		// https://pkg.go.dev/github.com/thejerf/suture#hdr-Serve_Method
+		panic(err)
+	}
 }
 
-func initGlobalContext() context.Context {
-	global, cancel := context.WithCancel(context.Background())
-	cancellations["global"] = withCancel{
-		ctx:    global,
-		cancel: cancel,
+func (s service) Stop() {
+	s.cancel() // calling cancel will cause a go-micro service to end and unregister it from the service registry.
+}
+
+// mainService provides control to a supervisor tree using simple http endpoints
+type mainService struct {
+	supervisor *suture.Supervisor
+	ctx        context.Context
+	cancel     context.CancelFunc
+}
+
+func (m mainService) Serve() {
+	mux := http.ServeMux{}
+	mux.Handle("/cancel1", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("closing :9200"))
+		m.supervisor.Remove(services["s1"])
+	}))
+
+	mux.Handle("/cancel2", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("closing :9201"))
+		m.supervisor.Remove(services["s2"])
+	}))
+
+	mux.Handle("/cancelglobal", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("closing all services"))
+		m.supervisor.Remove(services["main"])
+	}))
+
+	s := http.Server{
+		Addr:    ":9300",
+		Handler: &mux,
 	}
-	return global
+
+	go func() {
+		if err := s.ListenAndServe(); err != nil {
+			panic(err)
+		}
+	}()
+
+	<-m.ctx.Done()
+}
+
+func (m mainService) Stop() {
+	m.cancel()
 }
