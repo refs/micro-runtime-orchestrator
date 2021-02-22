@@ -2,13 +2,15 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"github.com/asim/go-micro/plugins/client/grpc/v3"
+	"github.com/asim/go-micro/v3"
+	"github.com/asim/go-micro/v3/client"
+	"github.com/asim/go-micro/v3/registry"
+	"github.com/asim/go-micro/v3/server"
 	"github.com/google/uuid"
-	pb "github.com/micro/examples/helloworld/proto"
-	"github.com/micro/go-micro/v2"
-	"github.com/micro/go-micro/v2/client"
-	"github.com/micro/go-micro/v2/client/grpc"
-	"github.com/micro/go-micro/v2/registry"
-	"github.com/micro/go-micro/v2/server"
+	pb "github.com/refs/whatever/helloworld/proto"
 	"github.com/thejerf/suture"
 	"net/http"
 	"os"
@@ -26,6 +28,8 @@ func (g *Greeter) Hello(ctx context.Context, req *pb.Request, rsp *pb.Response) 
 // cancellations represents a slice of service name + contexts to cancel spawned services
 // eventually move this to the runtime type.
 var cancellations = make(map[string]withCancel)
+
+//var r = registry.NewMemoryRegistry()
 var r = registry.NewRegistry()
 
 type withCancel struct {
@@ -37,8 +41,23 @@ var services = make(map[string]suture.ServiceToken)
 
 func main() {
 	supervisor := suture.NewSimple("universe")
-	r := registry.NewRegistry()
 	ctx, cancel := context.WithCancel(context.Background())
+	// we can override go-micro defaults to correctly propagate our functionality.
+	registry.DefaultRegistry = r
+
+	go func() {
+		watcher, err := r.Watch()
+		if err != nil {
+			panic(err)
+		}
+
+		for {
+			if v, err := watcher.Next(); err == nil {
+				d, _ := json.Marshal(v)
+				fmt.Printf("event: %s\n", string(d))
+			}
+		}
+	}()
 
 	halt := make(chan os.Signal, 1)
 	signal.Notify(halt, os.Interrupt)
@@ -50,18 +69,20 @@ func main() {
 	}
 
 	s1ctx, s1cancel := context.WithCancel(ctx)
+	s1addr := "0.0.0.0:9200"
 	s1 := service{
 		name:    "hello-world-1",
-		address: "0.0.0.0:9200",
+		address: &s1addr,
 		r:       r,
 		ctx:     s1ctx,
 		cancel:  s1cancel,
 	}
 
 	s2ctx, s2cancel := context.WithCancel(ctx)
+	s2addr := "0.0.0.0:9201"
 	s2 := service{
 		name:    "hello-world-2",
-		address: "0.0.0.0:9201",
+		address: &s2addr,
 		r:       r,
 		ctx:     s2ctx,
 		cancel:  s2cancel,
@@ -96,7 +117,7 @@ func newGrpcClient() client.Client {
 // service implements the suture.Service interface.
 type service struct {
 	name    string
-	address string
+	address *string
 	r       registry.Registry
 	ctx     context.Context
 	cancel  context.CancelFunc
@@ -113,11 +134,11 @@ func (s service) Serve() {
 		micro.Name(s.name),
 		micro.Registry(r),
 		micro.Server(microServer),
-		micro.Address(s.address),
 		micro.Context(s.ctx),
 	)
 
-	service.Init()
+	// we DON'T need to call init as we are not using env vars or cli flags.
+	//service.Init()
 
 	pb.RegisterGreeterHandler(service.Server(), new(Greeter))
 
@@ -141,6 +162,20 @@ type mainService struct {
 
 func (m mainService) Serve() {
 	mux := http.ServeMux{}
+	mux.Handle("/create-random", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		sname := req.Header.Get("sname")
+		sx, sxcancel := context.WithCancel(m.ctx)
+		serv := service{
+			name:   sname,
+			r:      r,
+			ctx:    sx,
+			cancel: sxcancel,
+		}
+
+		w.Write([]byte(fmt.Sprintf("created service %s", sname)))
+		m.supervisor.Add(serv)
+	}))
+
 	mux.Handle("/cancel1", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("closing :9200"))
 		m.supervisor.Remove(services["s1"])
